@@ -1,0 +1,24 @@
+const express = require('express');
+const cors = require('cors');
+const { exec } = require('child_process');
+const path = require('path');
+const app = express();
+
+app.use(cors());
+app.use(express.json());
+app.use('/downloads', express.static(path.join(__dirname, 'downloads')));
+
+app.post('/download', (req, res) => {
+  const videoURL = req.body.url;
+  const outputPath = `downloads/video-${Date.now()}.mp4`;
+
+  exec(`yt-dlp -o ${outputPath} "${videoURL}"`, (err, stdout, stderr) => {
+    if (err) {
+      console.error(err);
+      return res.json({ success: false });
+    }
+    return res.json({ success: true, file: outputPath });
+  });
+});
+
+app.listen(3000, () => console.log('🚀 Server running at http://localhost:3000'));
