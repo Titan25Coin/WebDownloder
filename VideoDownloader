@@ -1,24 +1,71 @@
-const express = require('express');
-const cors = require('cors');
-const { exec } = require('child_process');
-const path = require('path');
-const app = express();
+from flask import Flask, request, send_file, jsonify
+from flask_cors import CORS
+import yt_dlp, os, uuid
 
-app.use(cors());
-app.use(express.json());
-app.use('/downloads', express.static(path.join(__dirname, 'downloads')));
+app = Flask(__name__)
+CORS(app)
 
-app.post('/download', (req, res) => {
-  const videoURL = req.body.url;
-  const outputPath = `downloads/video-${Date.now()}.mp4`;
+DOWNLOAD_FOLDER = "downloads"
+os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
 
-  exec(`yt-dlp -o ${outputPath} "${videoURL}"`, (err, stdout, stderr) => {
-    if (err) {
-      console.error(err);
-      return res.json({ success: false });
-    }
-    return res.json({ success: true, file: outputPath });
-  });
-});
+@app.route('/download', methods=['POST'])
+def download_video():
+    data = request.get_json()
+    url = data.get("url")
+    quality = data.get("quality", "720")
+    fmt = data.get("format", "mp4")
 
-app.listen(3000, () => console.log('🚀 Server running at http://localhost:3000'));
+    if not url:
+        return jsonify({"error": "No URL provided"}), 400
+
+    uid = str(uuid.uuid4())
+    out_template = os.path.join(DOWNLOAD_FOLDER, uid + ".%(ext)s")
+
+    if fmt == "mp3":
+        ydl_opts = {
+            "format": "bestaudio/best",
+            "outtmpl": out_template,
+            "quiet": True,
+            "postprocessors": [{
+                "key": "FFmpegExtractAudio",
+                "preferredcodec": "mp3",
+                "preferredquality": "192",
+            }],
+        }
+    else:
+        ydl_opts = {
+            # Force H.264 video + AAC audio, capped at chosen quality
+            "format": (
+                f"bestvideo[vcodec^=avc1][height<={quality}]+"
+                "bestaudio[acodec^=mp4a]/best[ext=mp4]"
+            ),
+            "outtmpl": out_template,
+            "merge_output_format": "mp4",
+            "quiet": True,
+        }
+
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            ydl.download([url])
+
+        for fn in os.listdir(DOWNLOAD_FOLDER):
+            if fn.startswith(uid):
+                return jsonify({"file": f"http://localhost:5000/media/{fn}"})
+        return jsonify({"error": "Download succeeded but file not found"}), 500
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/media/<path:filename>')
+def serve_file(filename):
+    path = os.path.join(DOWNLOAD_FOLDER, filename)
+    if os.path.isfile(path):
+        return send_file(path, as_attachment=True)
+    return "Not found", 404
+
+if __name__ == '__main__':
+    app.run(debug=True, port=5000)
+
+
+
+
